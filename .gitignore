@@ -1,4 +1,5 @@
 node_modules/
 dist/
-public/books/pdfs/
 *.local
+compress_pdfs.py
+compress_big.py
