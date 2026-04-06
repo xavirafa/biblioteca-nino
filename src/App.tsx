@@ -34,10 +34,10 @@ function Header() {
                 textShadow: '0 2px 8px rgba(0,0,0,0.25)',
               }}
             >
-              Mi Biblioteca Magica
+              Lecturas Pablo
             </h1>
             <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)', margin: 0, fontFamily: "'Nunito', sans-serif", fontWeight: 600 }}>
-              Leer es una aventura!
+              Mis libros favoritos
             </p>
           </div>
         </Link>
@@ -63,7 +63,7 @@ function LayoutShell({ children }: { children: React.ReactNode }) {
         style={{ borderColor: '#EDE7F6', background: 'linear-gradient(135deg, #f3e8ff 0%, #e8f4fd 100%)' }}
       >
         <p style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 700, fontSize: '14px', color: 'var(--text-mid)', margin: 0 }}>
-          Secretos para Contar ✨ · Lectura y magia para todos
+          Lecturas Pablo ✨ · Secretos para Contar
         </p>
       </footer>
     </div>
