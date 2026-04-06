@@ -111,6 +111,7 @@ export default function FlipbookReader() {
   const [ttsOpen, setTtsOpen] = useState(false);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [showSleepMenu, setShowSleepMenu] = useState(false);
+  const [showTextPicker, setShowTextPicker] = useState(false);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const autoReadRef = useRef(false);
   const sleepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -240,7 +241,13 @@ export default function FlipbookReader() {
     return () => { if (sleepTimerRef.current) clearInterval(sleepTimerRef.current); };
   }, [sleepTimer]);
 
-  const onFlip = useCallback((e: any) => { setCurrentPage(e.data); }, []);
+  const onFlip = useCallback((e: any) => {
+    // Cancelar lectura al cambiar de pagina manualmente
+    window.speechSynthesis?.cancel();
+    setIsSpeaking(false);
+    setIsPaused(false);
+    setCurrentPage(e.data);
+  }, []);
   const prevPage = useCallback(() => { flipBookRef.current?.pageFlip()?.flipPrev(); }, []);
   const nextPage = useCallback(() => { flipBookRef.current?.pageFlip()?.flipNext(); }, []);
 
@@ -283,6 +290,36 @@ export default function FlipbookReader() {
     setIsPaused(false);
     setAutoRead(false);
   }, []);
+
+  /* Leer desde un parrafo especifico hacia adelante */
+  const speakFromParagraph = useCallback((paragraphIndex: number, allParagraphs: string[]) => {
+    if (!ttsSupported) return;
+    window.speechSynthesis.cancel();
+    setIsPaused(false);
+    setShowTextPicker(false);
+
+    const remaining = allParagraphs.slice(paragraphIndex).filter(t => t.trim());
+    if (remaining.length === 0) return;
+
+    let index = 0;
+    function speakNext() {
+      if (index >= remaining.length) {
+        setIsSpeaking(false);
+        if (autoReadRef.current) setTimeout(() => nextPage(), 800);
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(remaining[index]);
+      utterance.rate = speed;
+      utterance.lang = 'es-CO';
+      if (voices[selectedVoiceIndex]) utterance.voice = voices[selectedVoiceIndex];
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => { index++; setTimeout(speakNext, 300); };
+      utterance.onerror = () => setIsSpeaking(false);
+      utteranceRef.current = utterance;
+      window.speechSynthesis.speak(utterance);
+    }
+    speakNext();
+  }, [ttsSupported, speed, voices, selectedVoiceIndex, nextPage]);
 
   const toggleSpeak = useCallback(() => {
     if (isSpeaking) {
@@ -517,6 +554,21 @@ export default function FlipbookReader() {
                 {autoRead ? '⏹ Parar' : '📖 Leer todo'}
               </button>
 
+              {/* Elegir parrafo para leer */}
+              <button
+                onClick={() => setShowTextPicker(true)}
+                disabled={!pageText}
+                style={{
+                  padding: '7px 14px', borderRadius: '20px', border: 'none',
+                  background: 'linear-gradient(135deg, var(--lavender), var(--bubblegum))',
+                  color: 'white', fontFamily: "'Fredoka One', sans-serif",
+                  fontSize: '13px', cursor: pageText ? 'pointer' : 'default',
+                  opacity: pageText ? 1 : 0.4,
+                }}
+              >
+                📝 Elegir
+              </button>
+
               {/* Velocidad */}
               <div style={{ display: 'flex', gap: '4px' }}>
                 {SPEEDS.map(s => (
@@ -598,6 +650,91 @@ export default function FlipbookReader() {
           </div>
         </div>
       )}
+
+      {/* === OVERLAY SELECTOR DE TEXTO === */}
+      {showTextPicker && pageText && (() => {
+        // Dividir texto en parrafos (por punto seguido de espacio y mayuscula, o por saltos)
+        const allParagraphs: string[] = [];
+        const sides = [
+          { label: '📄 Pagina izquierda', text: spreadTexts.left },
+          { label: '📄 Pagina derecha', text: spreadTexts.right },
+        ].filter(s => s.text.trim());
+
+        sides.forEach(side => {
+          // Dividir en oraciones/frases de ~80-150 caracteres
+          const sentences = side.text.match(/[^.!?]+[.!?]+/g) || [side.text];
+          let chunk = '';
+          sentences.forEach(s => {
+            if (chunk.length + s.length > 120 && chunk.length > 30) {
+              allParagraphs.push(chunk.trim());
+              chunk = s;
+            } else {
+              chunk += s;
+            }
+          });
+          if (chunk.trim()) allParagraphs.push(chunk.trim());
+        });
+
+        return (
+          <div
+            style={{
+              position: 'absolute', inset: 0, zIndex: 60,
+              background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)',
+              display: 'flex', flexDirection: 'column',
+              padding: isMobile ? '16px' : '24px',
+            }}
+            onClick={() => setShowTextPicker(false)}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                flex: 1, maxWidth: '700px', width: '100%', margin: '0 auto',
+                background: 'white', borderRadius: '20px',
+                display: 'flex', flexDirection: 'column', overflow: 'hidden',
+              }}
+            >
+              {/* Header */}
+              <div style={{
+                padding: '14px 20px', background: 'linear-gradient(135deg, #5c35d4, #9c27b0)',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}>
+                <span style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '16px', color: 'white' }}>
+                  Toca donde quieres empezar a leer 👆
+                </span>
+                <button
+                  onClick={() => setShowTextPicker(false)}
+                  style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', width: '32px', height: '32px', color: 'white', fontSize: '16px', cursor: 'pointer' }}
+                >✕</button>
+              </div>
+
+              {/* Lista de parrafos */}
+              <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
+                {allParagraphs.map((para, i) => (
+                  <button
+                    key={i}
+                    onClick={() => speakFromParagraph(i, allParagraphs)}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left',
+                      padding: '12px 16px', marginBottom: '8px',
+                      background: 'linear-gradient(135deg, #f3e8ff, #e8f4fd)',
+                      border: '2px solid #EDE7F6', borderRadius: '14px',
+                      fontFamily: "'Nunito', sans-serif", fontWeight: 600,
+                      fontSize: '14px', color: 'var(--text-dark)',
+                      cursor: 'pointer', lineHeight: '1.5',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'linear-gradient(135deg, #e8d5ff, #d0eaff)'; e.currentTarget.style.borderColor = '#5c35d4'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'linear-gradient(135deg, #f3e8ff, #e8f4fd)'; e.currentTarget.style.borderColor = '#EDE7F6'; }}
+                  >
+                    <span style={{ fontSize: '12px', color: 'var(--text-light)', marginRight: '8px' }}>▶</span>
+                    {para}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
