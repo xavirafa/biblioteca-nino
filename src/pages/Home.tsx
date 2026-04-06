@@ -172,7 +172,11 @@ export default function Home() {
 
   function handleRead(book: Book) {
     if (!book.pdf_url) return;
-    navigate(`/read?url=${encodeURIComponent(book.pdf_url)}&title=${encodeURIComponent(book.title)}`);
+    // Prefijamos BASE_URL para que PDF.js resuelva correctamente en GitHub Pages
+    const resolvedUrl = book.pdf_url.startsWith('http')
+      ? book.pdf_url
+      : `${import.meta.env.BASE_URL}${book.pdf_url}`;
+    navigate(`/read?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(book.title)}`);
   }
 
   return (
