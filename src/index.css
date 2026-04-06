@@ -249,6 +249,47 @@
   font-weight: 600;
 }
 
+/* ========== LOMO DECORATIVO DEL LIBRO ========== */
+/* Forzar que las sombras internas de page-flip no creen gap */
+.stf__outerShadow,
+.stf__innerShadow,
+.stf__hardShadow,
+.stf__hardInnerShadow {
+  display: none !important;
+}
+
+/* Linea central sutil que simula el lomo */
+.stf__parent {
+  position: relative;
+}
+.stf__parent::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  background: linear-gradient(
+    to bottom,
+    transparent 2%,
+    rgba(60, 40, 20, 0.2) 10%,
+    rgba(60, 40, 20, 0.35) 50%,
+    rgba(60, 40, 20, 0.2) 90%,
+    transparent 98%
+  );
+  z-index: 35;
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+/* Solo mostrar el lomo en modo landscape (2 paginas) */
+@media (max-width: 767px) {
+  .stf__parent::after {
+    display: none;
+  }
+}
+
 /* ========== PANEL TTS ========== */
 .tts-panel {
   background: linear-gradient(135deg, #5c35d4 0%, #9c27b0 50%, #1976D2 100%);
@@ -256,6 +297,7 @@
   padding: 16px 20px 20px;
   color: white;
   box-shadow: 0 -8px 32px rgba(92,53,212,0.45);
+  backdrop-filter: blur(12px);
 }
 
 /* Botón PLAY/PAUSA grande */
