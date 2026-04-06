@@ -4,7 +4,8 @@ import * as pdfjsLib from 'pdfjs-dist';
 // @ts-ignore
 import HTMLFlipBook from 'react-pageflip';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+// Worker local (copiado en public/) para evitar problemas de CDN y CORS
+pdfjsLib.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.min.mjs`;
 
 /* ========== Renderizador de página PDF ========== */
 const PDFPageCanvas = React.memo(({ pdfDoc, pageNumber }: { pdfDoc: any; pageNumber: number }) => {
