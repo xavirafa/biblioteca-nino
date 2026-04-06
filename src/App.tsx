@@ -52,17 +52,12 @@ function Header() {
   );
 }
 
-function AppContent() {
+/* Layout con header y footer — solo para paginas que NO son el lector */
+function LayoutShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--bg)' }}>
       <Header />
-      <main className="flex-1">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/read" element={<FlipbookReader />} />
-        </Routes>
-      </main>
-
+      <main className="flex-1">{children}</main>
       <footer
         className="py-5 text-center border-t"
         style={{ borderColor: '#EDE7F6', background: 'linear-gradient(135deg, #f3e8ff 0%, #e8f4fd 100%)' }}
@@ -78,7 +73,13 @@ function AppContent() {
 export default function App() {
   return (
     <BrowserRouter basename="/biblioteca-nino">
-      <AppContent />
+      <Routes>
+        {/* El lector ocupa 100vh — sin header ni footer */}
+        <Route path="/read" element={<FlipbookReader />} />
+
+        {/* Biblioteca con header y footer */}
+        <Route path="/" element={<LayoutShell><Home /></LayoutShell>} />
+      </Routes>
     </BrowserRouter>
   );
 }

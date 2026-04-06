@@ -4,10 +4,10 @@ import * as pdfjsLib from 'pdfjs-dist';
 // @ts-ignore
 import HTMLFlipBook from 'react-pageflip';
 
-// Worker local (copiado en public/) para evitar problemas de CDN y CORS
+// Worker local para evitar problemas CDN/CORS
 pdfjsLib.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.min.mjs`;
 
-/* ========== Renderizador de página PDF ========== */
+/* ========== Renderizador de pagina PDF ========== */
 const PDFPageCanvas = React.memo(({ pdfDoc, pageNumber }: { pdfDoc: any; pageNumber: number }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -44,28 +44,29 @@ const PDFPageCanvas = React.memo(({ pdfDoc, pageNumber }: { pdfDoc: any; pageNum
   );
 });
 
-/* ========== Wrapper de página para react-pageflip ========== */
+/* ========== Wrapper de pagina ========== */
 const Page = React.forwardRef<HTMLDivElement, any>((props, ref) => (
   <div ref={ref} data-density={props.density || 'soft'} className="bg-white">
     {props.children}
   </div>
 ));
 
-/* ========== Velocidades de lectura ========== */
+/* ========== Velocidades ========== */
 const SPEEDS = [
-  { value: 0.7, label: 'Lento', emoji: '🐢' },
-  { value: 1.0, label: 'Normal', emoji: '😊' },
-  { value: 1.4, label: 'Rapido', emoji: '🐇' },
+  { value: 0.7, label: '🐢', title: 'Lento' },
+  { value: 1.0, label: '😊', title: 'Normal' },
+  { value: 1.4, label: '🐇', title: 'Rapido' },
 ];
 
-/* ========== Simplifica el nombre de una voz ========== */
-function voiceName(v: SpeechSynthesisVoice, idx: number): string {
-  const name = v.name
-    .replace(/Microsoft /g, '')
-    .replace(/Google /g, '')
-    .replace(/ \(.*\)/g, '')
-    .trim();
-  return `Voz ${idx + 1}: ${name.slice(0, 10)}`;
+/* ========== Detectar si es movil/tablet ========== */
+function useIsMobile() {
+  const [mobile, setMobile] = useState(window.innerWidth < 768);
+  useEffect(() => {
+    const handler = () => setMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+  return mobile;
 }
 
 /* ========== Componente principal ========== */
@@ -74,14 +75,17 @@ export default function FlipbookReader() {
   const pdfUrl = searchParams.get('url');
   const title = searchParams.get('title') || 'Mi libro';
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
 
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [useFallback, setUseFallback] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const flipBookRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const storageKey = pdfUrl ? `reading-pos:${pdfUrl}` : null;
 
   /* --- TTS --- */
@@ -90,8 +94,14 @@ export default function FlipbookReader() {
   const [selectedVoiceIndex, setSelectedVoiceIndex] = useState(0);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [pageText, setPageText] = useState('');
+  const [autoRead, setAutoRead] = useState(false);
+  const [ttsOpen, setTtsOpen] = useState(false);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const autoReadRef = useRef(false);
   const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+  // Mantener ref sincronizado
+  useEffect(() => { autoReadRef.current = autoRead; }, [autoRead]);
 
   /* Cargar voces */
   useEffect(() => {
@@ -113,10 +123,12 @@ export default function FlipbookReader() {
     setUseFallback(false);
     setPdfDoc(null);
 
-    const task = pdfjsLib.getDocument({ url: pdfUrl, withCredentials: false });
+    let cancelled = false;
+    const task = pdfjsLib.getDocument(pdfUrl);
 
     task.promise
       .then(doc => {
+        if (cancelled) { doc.destroy(); return; }
         setPdfDoc(doc);
         setNumPages(doc.numPages);
         if (storageKey) {
@@ -128,13 +140,13 @@ export default function FlipbookReader() {
         }
         setLoading(false);
       })
-      .catch(err => {
-        console.warn('PDF.js fallo (CORS u otro):', err);
+      .catch(() => {
+        if (cancelled) return;
         setUseFallback(true);
         setLoading(false);
       });
 
-    return () => { task.destroy?.(); };
+    return () => { cancelled = true; };
   }, [pdfUrl]);
 
   /* Guardar posicion */
@@ -144,14 +156,11 @@ export default function FlipbookReader() {
     }
   }, [currentPage, storageKey]);
 
-  /* Extraer texto de la página */
+  /* Extraer texto al cambiar de pagina */
   useEffect(() => {
     if (!pdfDoc || currentPage < 0) return;
     const pageNum = currentPage + 1;
     if (pageNum < 1 || pageNum > pdfDoc.numPages) return;
-
-    window.speechSynthesis?.cancel();
-    setIsSpeaking(false);
 
     pdfDoc.getPage(pageNum)
       .then((page: any) => page.getTextContent())
@@ -167,29 +176,78 @@ export default function FlipbookReader() {
     return () => { window.speechSynthesis?.cancel(); };
   }, []);
 
+  /* Fullscreen */
+  const toggleFullscreen = () => {
+    if (!isFullscreen) {
+      containerRef.current?.requestFullscreen?.();
+    } else {
+      document.exitFullscreen?.();
+    }
+  };
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
   const onFlip = useCallback((e: any) => { setCurrentPage(e.data); }, []);
-
   const prevPage = () => { flipBookRef.current?.pageFlip()?.flipPrev(); };
-  const nextPage = () => { flipBookRef.current?.pageFlip()?.flipNext(); };
+  const nextPage = useCallback(() => { flipBookRef.current?.pageFlip()?.flipNext(); }, []);
 
-  /* Leer la pagina actual */
-  const speakPage = useCallback(() => {
-    if (!ttsSupported || !pageText.trim()) return;
+  /* === TTS: hablar texto === */
+  const speakText = useCallback((text: string) => {
+    if (!ttsSupported || !text.trim()) return;
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(pageText);
+    const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = speed;
     utterance.lang = 'es-CO';
     if (voices[selectedVoiceIndex]) utterance.voice = voices[selectedVoiceIndex];
     utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      // Si auto-read esta activo, avanzar a la siguiente pagina
+      if (autoReadRef.current) {
+        setTimeout(() => nextPage(), 600);
+      }
+    };
     utterance.onerror = () => setIsSpeaking(false);
     utteranceRef.current = utterance;
     window.speechSynthesis.speak(utterance);
-  }, [ttsSupported, pageText, speed, voices, selectedVoiceIndex]);
+  }, [ttsSupported, speed, voices, selectedVoiceIndex, nextPage]);
 
-  const stopSpeaking = () => { window.speechSynthesis?.cancel(); setIsSpeaking(false); };
-  const toggleSpeak = () => { isSpeaking ? stopSpeaking() : speakPage(); };
-  const nextPageAndRead = () => { nextPage(); setTimeout(() => speakPage(), 1200); };
+  /* Leer pagina actual */
+  const speakPage = useCallback(() => {
+    speakText(pageText);
+  }, [speakText, pageText]);
+
+  const stopSpeaking = useCallback(() => {
+    window.speechSynthesis?.cancel();
+    setIsSpeaking(false);
+    setAutoRead(false);
+  }, []);
+
+  /* Auto-leer cuando cambia de pagina (si autoRead esta activo) */
+  useEffect(() => {
+    if (autoRead && pageText && !isSpeaking) {
+      // Esperar un momento para que la animacion del flip termine
+      const timer = setTimeout(() => speakText(pageText), 800);
+      return () => clearTimeout(timer);
+    }
+  }, [pageText, autoRead]);
+
+  /* Iniciar lectura continua desde la pagina actual */
+  const startContinuousRead = () => {
+    setAutoRead(true);
+    speakPage();
+  };
+
+  const toggleSpeak = () => {
+    if (isSpeaking) {
+      stopSpeaking();
+    } else {
+      speakPage();
+    }
+  };
 
   const progress = numPages > 0 ? ((currentPage + 1) / numPages) * 100 : 0;
   const pages = Array.from({ length: numPages }, (_, i) => i + 1);
@@ -198,9 +256,9 @@ export default function FlipbookReader() {
   if (!pdfUrl) return (
     <div style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '16px' }}>
       <span style={{ fontSize: '72px' }}>😕</span>
-      <p style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '24px', color: 'var(--text-mid)' }}>No se especifico ningun libro</p>
+      <p style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '24px', color: 'var(--text-mid)' }}>No se encontro el libro</p>
       <button onClick={() => navigate('/')} style={{ padding: '12px 28px', background: 'var(--lavender)', color: 'white', border: 'none', borderRadius: '50px', fontFamily: "'Fredoka One', sans-serif", fontSize: '18px', cursor: 'pointer' }}>
-        Volver a la biblioteca
+        Volver
       </button>
     </div>
   );
@@ -209,116 +267,141 @@ export default function FlipbookReader() {
   if (loading) return (
     <div style={{ minHeight: '80vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px' }}>
       <div className="animate-hop" style={{ fontSize: '80px', display: 'inline-block' }}>📚</div>
-      <p style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '26px', color: 'var(--text-mid)' }}>Abriendo el libro...</p>
-      <p style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 600, fontSize: '15px', color: 'var(--text-light)' }}>Esto puede tomar unos segundos</p>
+      <p style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '22px', color: 'var(--text-mid)' }}>Abriendo el libro...</p>
     </div>
   );
 
-  /* Fallback iframe cuando CORS bloquea PDF.js */
+  /* Fallback */
   if (useFallback) return (
     <div style={{ minHeight: 'calc(100vh - 4rem)', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: 'linear-gradient(135deg, #5c35d4, #9c27b0)', boxShadow: '0 4px 16px rgba(92,53,212,0.3)' }}>
-        <button onClick={() => navigate('/')} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', background: 'rgba(255,255,255,0.2)', border: '2px solid rgba(255,255,255,0.4)', borderRadius: '12px', color: 'white', fontFamily: "'Fredoka One', sans-serif", fontSize: '16px', cursor: 'pointer' }}>
-          Biblioteca
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', background: 'linear-gradient(135deg, #5c35d4, #9c27b0)' }}>
+        <button onClick={() => navigate('/')} style={{ padding: '6px 12px', background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', color: 'white', fontFamily: "'Fredoka One', sans-serif", fontSize: '13px', cursor: 'pointer' }}>
+          🏠 Volver
         </button>
-        <span style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '18px', color: 'white', flex: 1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '14px', color: 'white', flex: 1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {title}
         </span>
       </div>
-      <div style={{ margin: '16px', padding: '14px 18px', background: 'linear-gradient(135deg, #fff3e0, #fce4ec)', borderRadius: '16px', border: '2px solid #FFB74D', fontFamily: "'Nunito', sans-serif", fontSize: '14px', color: '#5D4037' }}>
-        <strong>Nota:</strong> Este libro se muestra en modo visor externo. El audiolibro no esta disponible. Puedes leer aqui abajo.
-      </div>
-      <iframe src={pdfUrl} style={{ flex: 1, border: 'none', minHeight: '70vh' }} title={title} allow="fullscreen" />
+      <iframe src={pdfUrl} style={{ flex: 1, border: 'none', minHeight: '80vh' }} title={title} allow="fullscreen" />
     </div>
   );
 
   /* ===== LECTOR PRINCIPAL ===== */
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 4rem)', background: 'var(--bg)', paddingBottom: '180px' }}>
-
-      {/* Barra de progreso arcoiris */}
-      <div style={{ width: '100%', height: '7px', background: '#EDE7F6' }}>
-        <div className="progress-rainbow" style={{ width: `${progress}%` }} />
-      </div>
-
-      {/* Toolbar superior */}
+    <div
+      ref={containerRef}
+      style={{
+        display: 'flex', flexDirection: 'column',
+        height: '100vh', width: '100vw',
+        background: '#f8f4ff', overflow: 'hidden', position: 'relative',
+      }}
+    >
+      {/* === BARRA SUPERIOR COMPACTA === */}
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 16px', background: 'linear-gradient(135deg, #5c35d4 0%, #9c27b0 100%)',
-        boxShadow: '0 4px 16px rgba(92,53,212,0.35)',
-        position: 'sticky', top: '4rem', zIndex: 40,
+        display: 'flex', alignItems: 'center', gap: '8px',
+        padding: '4px 10px', height: '36px', flexShrink: 0,
+        background: 'linear-gradient(90deg, #5c35d4, #7c3aed, #9c27b0)',
+        zIndex: 40,
       }}>
+        {/* Boton volver */}
         <button
           onClick={() => { stopSpeaking(); navigate('/'); }}
           style={{
-            display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px',
-            background: 'rgba(255,255,255,0.2)', border: '2px solid rgba(255,255,255,0.4)',
-            borderRadius: '12px', color: 'white', fontFamily: "'Fredoka One', sans-serif",
-            fontSize: '15px', cursor: 'pointer',
+            padding: '3px 10px', background: 'rgba(255,255,255,0.15)',
+            border: '1px solid rgba(255,255,255,0.3)', borderRadius: '6px',
+            color: 'white', fontFamily: "'Nunito', sans-serif", fontWeight: 700,
+            fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap',
           }}
         >
-          Biblioteca
+          🏠
         </button>
 
-        <div style={{ textAlign: 'center', flex: 1, margin: '0 12px' }}>
-          <div style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: 'clamp(12px, 2.5vw, 17px)', color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {title}
-          </div>
-          <div className="page-badge" style={{ display: 'inline-block', marginTop: '4px', fontSize: '13px', padding: '2px 12px' }}>
-            Pag {currentPage + 1} de {numPages}
-          </div>
+        {/* Titulo */}
+        <div style={{
+          flex: 1, fontFamily: "'Fredoka One', sans-serif", fontSize: '13px',
+          color: 'white', overflow: 'hidden', textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap', textAlign: 'center',
+        }}>
+          {title}
         </div>
 
-        <div style={{ width: '90px' }} />
+        {/* Pagina */}
+        <span style={{
+          fontFamily: "'Nunito', sans-serif", fontWeight: 700, fontSize: '11px',
+          color: 'rgba(255,255,255,0.8)', whiteSpace: 'nowrap',
+        }}>
+          {currentPage + 1}/{numPages}
+        </span>
+
+        {/* Fullscreen */}
+        <button
+          onClick={toggleFullscreen}
+          style={{
+            padding: '3px 8px', background: 'rgba(255,255,255,0.15)',
+            border: '1px solid rgba(255,255,255,0.3)', borderRadius: '6px',
+            color: 'white', fontSize: '14px', cursor: 'pointer',
+          }}
+          title={isFullscreen ? 'Salir' : 'Pantalla completa'}
+        >
+          {isFullscreen ? '✕' : '⛶'}
+        </button>
       </div>
 
-      {/* Area del flipbook */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px 60px', position: 'relative', minHeight: '400px' }}>
+      {/* === BARRA PROGRESO DELGADA === */}
+      <div style={{ width: '100%', height: '3px', background: '#EDE7F6', flexShrink: 0 }}>
+        <div className="progress-rainbow" style={{ width: `${progress}%`, height: '3px' }} />
+      </div>
 
-        {/* Boton pagina anterior */}
+      {/* === AREA DEL FLIPBOOK (llena toda la pantalla) === */}
+      <div style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        position: 'relative', padding: '0',
+        overflow: 'hidden',
+      }}>
+        {/* Flecha izquierda */}
         <button
           onClick={prevPage}
           style={{
-            position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)',
-            zIndex: 30, background: 'linear-gradient(135deg, #5c35d4, #9c27b0)',
-            border: 'none', borderRadius: '50%', width: '48px', height: '48px',
+            position: 'absolute', left: '2px',
+            top: '50%', transform: 'translateY(-50%)', zIndex: 30,
+            background: 'rgba(92,53,212,0.7)',
+            border: 'none', borderRadius: '50%',
+            width: '30px', height: '30px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '20px', cursor: 'pointer', boxShadow: '0 4px 16px rgba(92,53,212,0.5)',
-            color: 'white',
+            fontSize: '14px', cursor: 'pointer', color: 'white',
           }}
-          title="Pagina anterior"
-        >
-          ◀
-        </button>
+        >◀</button>
 
-        {/* Flipbook */}
-        <div style={{ width: '100%', maxWidth: '900px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {/* @ts-ignore — react-pageflip props */}
+        {/* Flipbook — maximo espacio posible */}
+        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {/* @ts-ignore */}
           <HTMLFlipBook
             ref={flipBookRef}
-            width={window.innerWidth < 768 ? Math.min(window.innerWidth * 0.75, 340) : 440}
-            height={window.innerWidth < 768 ? Math.min(window.innerHeight * 0.55, 480) : 620}
+            width={isMobile
+              ? window.innerWidth - 40
+              : Math.floor((window.innerWidth - 40) / 2)
+            }
+            height={window.innerHeight - 44}
             size="stretch"
-            minWidth={260}
-            maxWidth={880}
-            minHeight={360}
-            maxHeight={1300}
-            maxShadowOpacity={0.4}
+            minWidth={200}
+            maxWidth={isMobile ? window.innerWidth : Math.floor(window.innerWidth / 2)}
+            minHeight={300}
+            maxHeight={window.innerHeight - 44}
+            maxShadowOpacity={0.3}
             showCover={true}
             mobileScrollSupport={true}
-            useMouseEvents={false}
+            useMouseEvents={!isMobile}
             clickEventForward={false}
             onFlip={onFlip}
             startPage={currentPage}
             drawShadow={true}
-            flippingTime={900}
-            usePortrait={window.innerWidth < 768}
+            flippingTime={800}
+            usePortrait={isMobile}
             startZIndex={0}
             autoSize={true}
-            swipeDistance={30}
-            showPageCorners={false}
+            swipeDistance={isMobile ? 20 : 30}
+            showPageCorners={!isMobile}
             disableFlipByClick={false}
-            className="shadow-2xl rounded"
             style={{ margin: '0 auto' }}
           >
             {pages.map(pageNum => (
@@ -329,101 +412,148 @@ export default function FlipbookReader() {
           </HTMLFlipBook>
         </div>
 
-        {/* Boton pagina siguiente */}
+        {/* Flecha derecha */}
         <button
           onClick={nextPage}
           style={{
-            position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
-            zIndex: 30, background: 'linear-gradient(135deg, #9c27b0, #0288D1)',
-            border: 'none', borderRadius: '50%', width: '48px', height: '48px',
+            position: 'absolute', right: '2px',
+            top: '50%', transform: 'translateY(-50%)', zIndex: 30,
+            background: 'rgba(156,39,176,0.7)',
+            border: 'none', borderRadius: '50%',
+            width: '30px', height: '30px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '20px', cursor: 'pointer', boxShadow: '0 4px 16px rgba(156,39,176,0.5)',
-            color: 'white',
+            fontSize: '14px', cursor: 'pointer', color: 'white',
           }}
-          title="Pagina siguiente"
-        >
-          ▶
-        </button>
+        >▶</button>
       </div>
 
-      {/* ===== PANEL TTS FIJO ABAJO ===== */}
-      <div className="tts-panel" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 50 }}>
+      {/* === PANEL TTS FLOTANTE (esquina inferior derecha) === */}
+      {ttsSupported && (
+        <div style={{
+          position: 'absolute', bottom: isMobile ? '8px' : '12px',
+          right: isMobile ? '8px' : '16px', zIndex: 50,
+          display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px',
+        }}>
+          {/* Panel expandido */}
+          {ttsOpen && (
+            <div style={{
+              background: 'linear-gradient(135deg, rgba(92,53,212,0.95), rgba(156,39,176,0.95))',
+              backdropFilter: 'blur(12px)',
+              borderRadius: '16px', padding: '12px 14px',
+              boxShadow: '0 8px 32px rgba(92,53,212,0.4)',
+              minWidth: isMobile ? '220px' : '260px',
+              animation: 'slideUp 0.25s ease-out',
+            }}>
+              {/* Velocidad */}
+              <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', justifyContent: 'center' }}>
+                {SPEEDS.map(s => (
+                  <button
+                    key={s.value}
+                    onClick={() => setSpeed(s.value)}
+                    title={s.title}
+                    style={{
+                      padding: '4px 12px', borderRadius: '14px', border: 'none',
+                      background: speed === s.value ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.15)',
+                      color: speed === s.value ? '#5c35a8' : 'white',
+                      fontWeight: 800, fontSize: '16px', cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >{s.label}</button>
+                ))}
+              </div>
 
-        {/* Fila 1: titulo + velocidades */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
-          <span style={{ fontFamily: "'Fredoka One', sans-serif", fontSize: '17px', color: 'white' }}>
-            Audiolibro
-          </span>
+              {/* Voces */}
+              {voices.length > 1 && (
+                <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {voices.slice(0, 4).map((v, i) => (
+                    <button
+                      key={i}
+                      onClick={() => { setSelectedVoiceIndex(i); if (isSpeaking) stopSpeaking(); }}
+                      style={{
+                        padding: '3px 8px', borderRadius: '10px', border: 'none',
+                        background: selectedVoiceIndex === i ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.12)',
+                        color: selectedVoiceIndex === i ? '#5c35a8' : 'rgba(255,255,255,0.8)',
+                        fontFamily: "'Nunito', sans-serif", fontWeight: 700, fontSize: '11px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {v.name.replace(/Microsoft |Google /g, '').replace(/ \(.*\)/g, '').slice(0, 12)}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-          {ttsSupported && (
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              {SPEEDS.map(s => (
+              {/* Controles */}
+              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
+                {/* Leer esta pagina */}
                 <button
-                  key={s.value}
-                  className={`speed-btn${speed === s.value ? ' active' : ''}`}
-                  onClick={() => {
-                    setSpeed(s.value);
-                    if (isSpeaking) { stopSpeaking(); setTimeout(speakPage, 150); }
+                  onClick={toggleSpeak}
+                  disabled={!pageText}
+                  style={{
+                    padding: '6px 14px', borderRadius: '12px', border: 'none',
+                    background: isSpeaking ? 'var(--coral)' : 'var(--grass)',
+                    color: 'white', fontFamily: "'Nunito', sans-serif",
+                    fontWeight: 800, fontSize: '12px', cursor: pageText ? 'pointer' : 'default',
+                    opacity: pageText ? 1 : 0.4,
+                    boxShadow: isSpeaking ? '0 0 12px rgba(255,112,67,0.5)' : '0 2px 8px rgba(102,187,106,0.4)',
                   }}
-                  title={s.label}
                 >
-                  {s.emoji} {s.label}
+                  {isSpeaking ? '⏸ Parar' : '▶ Pagina'}
                 </button>
-              ))}
+
+                {/* Leer libro completo */}
+                <button
+                  onClick={autoRead ? stopSpeaking : startContinuousRead}
+                  disabled={!pageText}
+                  style={{
+                    padding: '6px 14px', borderRadius: '12px', border: 'none',
+                    background: autoRead ? 'var(--coral)' : 'linear-gradient(135deg, var(--sky), var(--ocean))',
+                    color: 'white', fontFamily: "'Nunito', sans-serif",
+                    fontWeight: 800, fontSize: '12px', cursor: pageText ? 'pointer' : 'default',
+                    opacity: pageText ? 1 : 0.4,
+                    boxShadow: autoRead ? '0 0 12px rgba(255,112,67,0.5)' : '0 2px 8px rgba(79,195,247,0.4)',
+                  }}
+                >
+                  {autoRead ? '⏹ Detener' : '📖 Leer todo'}
+                </button>
+              </div>
+
+              {/* Sin texto */}
+              {!pageText && (
+                <p style={{
+                  textAlign: 'center', fontFamily: "'Nunito', sans-serif",
+                  fontWeight: 600, fontSize: '10px', color: 'rgba(255,255,255,0.5)',
+                  margin: '6px 0 0',
+                }}>
+                  Esta pagina es solo imagen
+                </p>
+              )}
             </div>
           )}
-        </div>
 
-        {/* Fila 2: selector de voz */}
-        {ttsSupported && voices.length > 1 && (
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
-            {voices.slice(0, 4).map((v, i) => (
-              <button
-                key={i}
-                className={`voice-btn${selectedVoiceIndex === i ? ' active' : ''}`}
-                onClick={() => { setSelectedVoiceIndex(i); if (isSpeaking) stopSpeaking(); }}
-              >
-                {voiceName(v, i)}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Fila 3: controles de navegacion + play */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-          <button className="nav-btn-tts" onClick={prevPage} title="Pagina anterior">
-            <span style={{ fontSize: '20px' }}>⬅</span>
-            <span style={{ fontSize: '11px' }}>Anterior</span>
-          </button>
-
+          {/* Boton flotante para abrir/cerrar TTS */}
           <button
-            className={`tts-btn-play${isSpeaking ? ' speaking' : ''}`}
-            onClick={ttsSupported ? toggleSpeak : undefined}
-            disabled={!ttsSupported || !pageText}
-            title={isSpeaking ? 'Parar' : 'Escuchar pagina'}
-            style={{ opacity: (!ttsSupported || !pageText) ? 0.5 : 1 }}
+            onClick={() => setTtsOpen(o => !o)}
+            style={{
+              width: isMobile ? '48px' : '52px', height: isMobile ? '48px' : '52px',
+              borderRadius: '50%', border: 'none',
+              background: (isSpeaking || autoRead)
+                ? 'linear-gradient(135deg, var(--coral), #E53935)'
+                : 'linear-gradient(135deg, #5c35d4, #9c27b0)',
+              color: 'white', fontSize: '22px', cursor: 'pointer',
+              boxShadow: (isSpeaking || autoRead)
+                ? '0 4px 20px rgba(255,112,67,0.6)'
+                : '0 4px 20px rgba(92,53,212,0.5)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'all 0.2s',
+              animation: (isSpeaking || autoRead) ? 'pulse-glow-red 1.5s ease-in-out infinite' : 'none',
+            }}
+            title="Audiolibro"
           >
-            {isSpeaking ? '⏸' : '🎧'}
-          </button>
-
-          <button
-            className="nav-btn-tts"
-            onClick={ttsSupported ? nextPageAndRead : nextPage}
-            title="Siguiente pagina y leer"
-          >
-            <span style={{ fontSize: '20px' }}>➡</span>
-            <span style={{ fontSize: '11px' }}>{ttsSupported ? 'Sig + Leer' : 'Siguiente'}</span>
+            {ttsOpen ? '✕' : (isSpeaking || autoRead) ? '🔊' : '🎧'}
           </button>
         </div>
-
-        {/* Aviso si la pagina no tiene texto */}
-        {ttsSupported && !pageText && !loading && (
-          <p style={{ textAlign: 'center', fontFamily: "'Nunito', sans-serif", fontWeight: 600, fontSize: '12px', color: 'rgba(255,255,255,0.6)', margin: '8px 0 0' }}>
-            Esta pagina es imagen, no tiene texto para leer en voz alta
-          </p>
-        )}
-      </div>
-
+      )}
     </div>
   );
 }
